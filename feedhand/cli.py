@@ -8,8 +8,9 @@ import argparse
 import json
 import os
 import sys
+import time
 
-from feedhand import __version__, log as L, post as PO, prefs as P
+from feedhand import __version__, log as L, media as M, post as PO, prefs as P, schedule as S
 from feedhand.channels import manual, meta, x as X
 
 SECRETS = {"x": X.ENV, "threads": list(meta.Threads.ENV), "instagram": list(meta.Instagram.ENV)}
@@ -75,6 +76,11 @@ def cmd_publish(a):
              "preview": v}, 3)
     if a.dry_run:
         out({"ok": True, "dry_run": True, "approver": approver, "preview": v})
+    results, failed = publish_post(post, v, approver, prefs)
+    out({"ok": not failed, "approver": approver, "results": results}, 2 if failed else 0)
+
+
+def publish_post(post, v, approver, prefs, note_prefix=""):
     results, failed = [], False
     for c in v["channels"]:
         ch = c["channel"]
@@ -84,24 +90,100 @@ def cmd_publish(a):
             if r["mode"] == "manual":
                 b = manual.bundle(post, ch, prefs["out_dir"])
                 res = {"channel": ch, "mode": "manual", "status": "bundle_ready", **b}
-                L.add(**rec, status="bundle_ready", note=b["dir"], est_cost_usd=0)
+                L.add(**rec, status="bundle_ready", note=note_prefix + b["dir"], est_cost_usd=0)
             elif ch == "x":
                 posts = X.XClient().publish_thread(c["planned_posts"], r["media"], r["alt"])
                 res = {"channel": ch, "status": "published", "posts": posts, "url": posts[0]["url"],
                        "est_cost_usd": c["est_cost_usd"]}
                 L.add(**rec, status="published", post_id=",".join(p["id"] for p in posts),
-                      url=posts[0]["url"], est_cost_usd=c["est_cost_usd"])
+                      url=posts[0]["url"], est_cost_usd=c["est_cost_usd"], note=note_prefix or None)
             else:
                 cli = meta.Threads() if ch == "threads" else meta.Instagram()
                 d = cli.publish(r["text"], r["media"])
                 res = {"channel": ch, "status": "published", **d, "est_cost_usd": 0}
-                L.add(**rec, status="published", post_id=d["id"], url=d.get("url"), est_cost_usd=0)
+                L.add(**rec, status="published", post_id=d["id"], url=d.get("url"), est_cost_usd=0,
+                      note=note_prefix or None)
         except Exception as e:  # noqa: BLE001
             failed = True
             res = {"channel": ch, "status": "error", "error": str(e)}
-            L.add(**rec, status="error", note=str(e)[:500])
+            L.add(**rec, status="error", note=(note_prefix + str(e))[:500])
         results.append(res)
-    out({"ok": not failed, "approver": approver, "results": results}, 2 if failed else 0)
+    return results, failed
+
+
+def cmd_sched_add(a):
+    post = PO.load(a.post)
+    v = PO.validate(post)
+    if not v["ok"]:
+        out({"ok": False, "stage": "validate", **v}, 2)
+    approver = _approver(post, a, P.load())
+    if not approver:
+        out({"ok": False, "needs_confirmation": True,
+             "message": "scheduling needs approval now: show the preview and time, re-run with --approved-by",
+             "preview": v}, 3)
+    try:
+        at = S.parse_at(a.at)
+    except ValueError as e:
+        out({"ok": False, "error": f"bad --at: {e}"}, 2)
+    if at.timestamp() <= time.time():
+        out({"ok": False, "error": f"--at {at.isoformat()} is in the past"}, 2)
+    item = S.add(post, at, approver)
+    out({"ok": True, "scheduled": {k: item[k] for k in ("id", "due_at", "approver", "status")},
+         "est_cost_usd": v["est_cost_usd"], "pending": S.pending_count()})
+
+
+def cmd_sched_list(a):
+    items = S.list_(a.status)
+    if not a.full:
+        for i in items:
+            p = i.pop("post")
+            i["channels"] = p.get("channels")
+            i["text_head"] = (p.get("text") or "")[:60]
+    out({"ok": True, "items": items, "pending": S.pending_count()})
+
+
+def cmd_sched_cancel(a):
+    ok = S.cancel(a.id)
+    out({"ok": ok, "cancelled": a.id if ok else None,
+         **({} if ok else {"error": "not found or not pending"})}, 0 if ok else 2)
+
+
+def cmd_sched_run(a):
+    now = S.parse_at(a.now).timestamp() if a.now else time.time()
+    prefs = P.load()
+    ran, any_fail = [], False
+    for it in S.claim_due(now):
+        post = it["post"]
+        v = PO.validate(post)
+        if not v["ok"]:
+            res, failed = [{"status": "error", "stage": "validate", "errors": v["errors"],
+                            "channels": v["channels"]}], True
+        else:
+            res, failed = publish_post(post, v, it["approver"], prefs, note_prefix=f"schedule#{it['id']} ")
+        S.finish(it["id"], not failed, res)
+        any_fail |= failed
+        ran.append({"id": it["id"], "status": "failed" if failed else "done", "results": res})
+    out({"ok": not any_fail, "ran": ran, "pending": S.pending_count(),
+         "stop_routine": S.pending_count() == 0}, 2 if any_fail else 0)
+
+
+def cmd_media_prep(a):
+    if not M.available():
+        out({"ok": False, "error": "ffmpeg/ffprobe not installed"}, 2)
+    try:
+        r = M.prep(a.file, a.channel, P.load()["out_dir"], a.thumb)
+    except Exception as e:  # noqa: BLE001
+        out({"ok": False, "error": str(e)}, 2)
+    ok = not r.get("remaining_issues")
+    out({"ok": ok, **r, "note": "limits are approximate; see README"}, 0 if ok else 2)
+
+
+def cmd_media_check(a):
+    out({"ok": True, **M.check(a.file, a.channel)})
+
+
+def cmd_cost(a):
+    out({"ok": True, **L.cost(a.period), "note": "estimates from the log, not billed amounts"})
 
 
 def cmd_delete(a):
@@ -171,6 +253,35 @@ def build():
     lg.add_argument("--limit", type=int, default=50)
     lg.add_argument("--channel")
     lg.set_defaults(f=cmd_log)
+    sc = sp.add_parser("schedule")
+    ssp = sc.add_subparsers(dest="sub", required=True)
+    sa = ssp.add_parser("add")
+    sa.add_argument("post")
+    sa.add_argument("--at", required=True, help="ISO time; no offset = box-local")
+    sa.add_argument("--approved-by")
+    sa.set_defaults(f=cmd_sched_add)
+    sl = ssp.add_parser("list")
+    sl.add_argument("--status")
+    sl.add_argument("--full", action="store_true")
+    sl.set_defaults(f=cmd_sched_list)
+    scn = ssp.add_parser("cancel")
+    scn.add_argument("id", type=int)
+    scn.set_defaults(f=cmd_sched_cancel)
+    sr = ssp.add_parser("run-due")
+    sr.add_argument("--now", help=argparse.SUPPRESS)
+    sr.set_defaults(f=cmd_sched_run)
+    md = sp.add_parser("media")
+    msp = md.add_subparsers(dest="sub", required=True)
+    for name, fn in (("prep", cmd_media_prep), ("check", cmd_media_check)):
+        m = msp.add_parser(name)
+        m.add_argument("file")
+        m.add_argument("--channel", choices=["x", "threads", "instagram"], default="x")
+        if name == "prep":
+            m.add_argument("--thumb", type=float, metavar="SECONDS")
+        m.set_defaults(f=fn)
+    co = sp.add_parser("cost")
+    co.add_argument("--period", choices=["week", "month", "all"], default="month")
+    co.set_defaults(f=cmd_cost)
     pr = sp.add_parser("prefs")
     pr.add_argument("--set", nargs="*", default=[])
     pr.set_defaults(f=cmd_prefs)

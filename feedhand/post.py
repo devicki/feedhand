@@ -107,6 +107,27 @@ def x_cost(texts: list[str], r: dict) -> float:
     return round(c, 4)
 
 
+def media_warnings(media, ch) -> list[str]:
+    from feedhand import media as M
+    out = []
+    for m in media:
+        lp = Path(m).expanduser()
+        if m.startswith("http") or not lp.exists() or lp.suffix.lower() not in VIDEO_EXT | {".gif"}:
+            continue
+        if not M.available():
+            out.append(f"{ch}: cannot check {m} (ffmpeg not installed)")
+            continue
+        try:
+            c = M.check(lp, ch)
+        except Exception as e:  # noqa: BLE001
+            out.append(f"{ch}: could not probe {m}: {e}")
+            continue
+        if c["needs_prep"]:
+            out.append(f"{ch}: media needs prep: {m}: {'; '.join(c['issues'])} "
+                       f"-> run `feedhand media prep {m} --channel {ch}`")
+    return out
+
+
 def validate_channel(post: dict, ch: str) -> dict:
     errs, warns = [], []
     r = resolve(post, ch)
@@ -122,6 +143,8 @@ def validate_channel(post: dict, ch: str) -> dict:
             errs.append(f"unsupported media type: {m}")
         if not m.startswith("http") and not Path(m).expanduser().exists():
             errs.append(f"media file not found: {m}")
+    if ch in ("x", "threads", "instagram"):
+        warns += media_warnings(media, ch)
     if ch == "x":
         texts = x_plan(r)
         for i, t in enumerate(texts):

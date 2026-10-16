@@ -26,6 +26,13 @@ Every command prints one JSON object. Exit codes: `0` ok, `2` error, `3` needs c
 | `feedhand publish post.json --approved-by NAME [--dry-run]` | validate, then publish / bundle each channel, log results |
 | `feedhand delete x TWEET_ID --approved-by NAME` | delete an X post (estimated $0.01, logged) |
 | `feedhand refresh-token threads\|instagram` | extend a 60-day Meta token (new value withheld unless `--show`) |
+| `feedhand schedule add post.json --at 2026-10-20T09:00 --approved-by NAME` | validate + approve now, queue for later (no offset = box-local time); local media copied to `~/.feedhand/queue/<id>/` |
+| `feedhand schedule list [--status pending\|done\|failed\|cancelled] [--full]` | queued items |
+| `feedhand schedule cancel ID` | cancel a pending item (removes its media copy) |
+| `feedhand schedule run-due` | publish due items once each (pending → publishing → done/failed), logged with `schedule#ID`; prints `pending` and `stop_routine` |
+| `feedhand media check FILE [--channel x\|threads\|instagram]` | probe a video/GIF/image against channel limits |
+| `feedhand media prep FILE [--channel x] [--thumb SECONDS]` | transcode/trim/downscale only when needed → `~/feedhand-out/prepared/`; optional thumbnail JPEG |
+| `feedhand cost [--period week\|month\|all]` | estimated X API spend per channel from the log + post/delete counts (week = since Monday, month = since the 1st; default month) |
 | `feedhand log [--channel x] [--limit N]` | posting history (SQLite, `~/.feedhand/history.db`) |
 | `feedhand prefs [--set k=v ...]` | `~/.feedhand/prefs.json`, mode 600 |
 
@@ -40,6 +47,22 @@ See [`post.example.json`](post.example.json). Top-level `text`/`media` are defau
 - **Instagram** (professional account): media required, caption ≤2200, ≤30 hashtags, carousel ≤10, public HTTPS media.
 - **Naver Blog / Reddit**: no posting API used; a bundle (`post.txt`, numbered images, `meta.json`) is written to `~/feedhand-out/`.
 
+## Scheduling
+
+Approval happens when the item is added, not when it runs. Run `feedhand schedule run-due` from a routine every 10–15 minutes while `pending > 0`; stop the routine when `stop_routine` is true. Items stuck in `publishing` (runner crashed mid-post) are never retried automatically, to avoid double posts — check the channel and cancel/re-add by hand. Due items are re-validated before posting; a failure marks the item `failed` with the error in `result`.
+
+## Media prep (approximate limits)
+
+`draft validate` warns `media needs prep` when a local video/GIF exceeds a channel limit. `media prep` re-encodes to MP4 (H.264 + AAC, yuv420p, faststart) only in that case and reports `trimmed: true` if it cut the end — tell the user before posting a trimmed video. Limits used (platforms change these; treat as approximate):
+
+| | X (standard account) | Threads | Instagram |
+|---|---|---|---|
+| Video | MP4/MOV, H.264/AAC, ≤512 MB, ≤140 s, ≤1920×1200, ≤60 fps | MP4/MOV, H.264/HEVC, ≤1 GB, ≤5 min, ≤1920 px | MP4/MOV, H.264/HEVC, ≤300 MB, ≤90 s, ≤1920 px |
+| GIF | ≤15 MB | — | — |
+| Image | ≤5 MB (not auto-resized) | ~8 MB | ~8 MB |
+
+Requires `ffmpeg`/`ffprobe` on PATH.
+
 ## Secrets (environment only)
 
 | Channel | Variables | Where |
@@ -50,9 +73,13 @@ See [`post.example.json`](post.example.json). Top-level `text`/`media` are defau
 
 ## Status
 
-- X module: live posting and deleting verified (post $0.015, delete $0.01 per the X console).
+- X module: live posting (text and video) and deleting verified (post $0.015, delete $0.01 per the X console).
 - Threads / Instagram modules: skeletons following Meta docs (container → status poll → publish); **untested live**.
 
 ## License
 
 MIT
+
+## Roadmap
+
+- Post-performance check (views/likes/replies a day after posting, ~$0.005 per read, opt-in) — planned for when multiple channels and replies need managing.
