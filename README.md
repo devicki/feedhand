@@ -24,7 +24,7 @@ Every command prints one JSON object. Exit codes: `0` ok, `2` error, `3` needs c
 | `feedhand channels` | API-ready vs manual channels |
 | `feedhand draft validate post.json` | per-channel hard-rule check + estimated X cost |
 | `feedhand publish post.json --approved-by NAME [--dry-run]` | validate, then publish / bundle each channel, log results |
-| `feedhand delete x TWEET_ID --approved-by NAME` | delete an X post |
+| `feedhand delete x TWEET_ID --approved-by NAME` | delete an X post (estimated $0.01, logged) |
 | `feedhand refresh-token threads\|instagram` | extend a 60-day Meta token (new value withheld unless `--show`) |
 | `feedhand log [--channel x] [--limit N]` | posting history (SQLite, `~/.feedhand/history.db`) |
 | `feedhand prefs [--set k=v ...]` | `~/.feedhand/prefs.json`, mode 600 |
@@ -50,7 +50,7 @@ See [`post.example.json`](post.example.json). Top-level `text`/`media` are defau
 
 ## Status
 
-- X module: unit-tested with mocked HTTP (OAuth 1.0a signature verified against the reference vector); not yet run against a live account.
+- X module: live posting and deleting verified (post $0.015, delete $0.01 per the X console).
 - Threads / Instagram modules: skeletons following Meta docs (container → status poll → publish); **untested live**.
 
 ## License

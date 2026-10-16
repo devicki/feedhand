@@ -33,6 +33,7 @@ HASHTAG_RE = re.compile(r"(?<!\w)#[\w\u3131-\uD79D]+", re.U)
 X_COST_POST = 0.015
 X_COST_POST_LINK = 0.20
 X_COST_MEDIA_ALT = 0.005
+X_COST_DELETE = 0.01  # confirmed in the X console usage view
 
 
 def load(path) -> dict:

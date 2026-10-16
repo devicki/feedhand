@@ -104,3 +104,15 @@ def test_prefs_mode(capsys):
     assert d["prefs"]["language"] == "ko" and d["prefs"]["x_link_cost_warning"] is False
     assert stat.S_IMODE(os.stat(P.path()).st_mode) == 0o600
     assert run(capsys, "prefs", "--set", "bad")[0] == 2
+
+
+def test_delete_cost_logged(capsys, monkeypatch):
+    class Fake:
+        def delete(self, tid):
+            return True
+
+    monkeypatch.setattr(X, "XClient", Fake)
+    code, d = run(capsys, "delete", "x", "123", "--approved-by", "me")
+    assert code == 0 and d["est_cost_usd"] == 0.01
+    r = L.rows()[0]
+    assert r["status"] == "deleted" and r["est_cost_usd"] == 0.01

@@ -114,8 +114,8 @@ def cmd_delete(a):
     except Exception as e:  # noqa: BLE001
         out({"ok": False, "error": str(e)}, 2)
     L.add(requester="user", approver=a.approved_by, channel="x", mode="api",
-          status="deleted" if ok else "delete_failed", post_id=a.id, est_cost_usd=0)
-    out({"ok": ok, "deleted": a.id}, 0 if ok else 2)
+          status="deleted" if ok else "delete_failed", post_id=a.id, est_cost_usd=PO.X_COST_DELETE if ok else 0)
+    out({"ok": ok, "deleted": a.id, "est_cost_usd": PO.X_COST_DELETE if ok else 0}, 0 if ok else 2)
 
 
 def cmd_refresh(a):
