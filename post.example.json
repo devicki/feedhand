@@ -1,0 +1,14 @@
+{
+ "requester": "user",
+ "channels": ["x", "threads", "instagram", "naver"],
+ "text": "Default text used by any channel without its own.",
+ "media": ["https://cdn.example.com/photo1.jpg"],
+ "reply_link_instead": false,
+ "per_channel": {
+  "x": {"text": "Short X version", "thread": ["Second post in the thread"], "mode": "api"},
+  "threads": {"text": "Threads version (<=500 chars)"},
+  "instagram": {"text": "Caption #tag", "media": ["https://cdn.example.com/photo1.jpg", "https://cdn.example.com/clip.mp4"]},
+  "naver": {"title": "Blog title", "text": "Long blog body...", "mode": "manual"},
+  "reddit": {"title": "Post title", "subreddit": "example", "mode": "manual"}
+ }
+}
