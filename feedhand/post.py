@@ -20,7 +20,7 @@ import json
 import re
 from pathlib import Path
 
-API_CHANNELS = {"x", "threads", "instagram"}
+API_CHANNELS = {"x", "x_article", "threads", "instagram"}
 MANUAL_CHANNELS = {"naver", "reddit"}
 ALL_CHANNELS = API_CHANNELS | MANUAL_CHANNELS
 
@@ -48,12 +48,29 @@ def load(path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def resolve(post: dict, ch: str) -> dict:
+def default_mode(ch: str, prefs: dict | None = None) -> str:
+    """Mode when post.json does not set one: prefs per_channel_mode[ch], then default_mode_<ch>;
+    x_article follows X's setting unless it has its own. Manual-only channels are always manual."""
+    if ch in MANUAL_CHANNELS:
+        return "manual"
+    if prefs is None:
+        from feedhand import prefs as P
+        prefs = P.load()
+    pcm = prefs.get("per_channel_mode") or {}
+    for c in ([ch, "x"] if ch == "x_article" else [ch]):
+        m = pcm.get(c) or prefs.get(f"default_mode_{c}")
+        if m:
+            return m
+    return "api"
+
+
+def resolve(post: dict, ch: str, prefs: dict | None = None) -> dict:
     pc = (post.get("per_channel") or {}).get(ch, {})
     return {
         "text": pc.get("text", post.get("text", "")) or "",
-        "media": list(pc.get("media", post.get("media", [])) or []),
-        "mode": pc.get("mode") or ("manual" if ch in MANUAL_CHANNELS else "api"),
+        "media": list(pc.get("media", post.get("media", [])) or []) if ch != "x_article" else [],
+        "mode": pc.get("mode") or default_mode(ch, prefs),
+        "cover": pc.get("cover"),
         "thread": list(pc.get("thread", []) or []),
         "alt": pc.get("alt", post.get("alt", {})) or {},
         "title": pc.get("title", post.get("title")),
@@ -119,7 +136,7 @@ def x_cost(texts: list[str], r: dict) -> float:
     return round(c, 4)
 
 
-def media_warnings(media, ch) -> list[str]:
+def media_warnings(media, ch, prefs=None) -> list[str]:
     from feedhand import media as M
     out = []
     for m in media:
@@ -130,7 +147,7 @@ def media_warnings(media, ch) -> list[str]:
             out.append(f"{ch}: cannot check {m} (ffmpeg not installed)")
             continue
         try:
-            c = M.check(lp, ch)
+            c = M.check(lp, ch, prefs)
         except Exception as e:  # noqa: BLE001
             out.append(f"{ch}: could not probe {m}: {e}")
             continue
@@ -146,10 +163,12 @@ def validate_channel(post: dict, ch: str, prefs: dict | None = None) -> dict:
         from feedhand import prefs as P
         prefs = P.load()
     errs, warns = [], []
-    r = resolve(post, ch)
+    r = resolve(post, ch, prefs)
     media = r["media"]
     kinds = [kind(m) for m in media]
     est = 0.0
+    if ch == "x_article" and r["media"] == [] and (post.get("per_channel") or {}).get(ch, {}).get("media"):
+        warns.append("X Article: per_channel.x_article.media is ignored; put images in the Markdown body")
     if r["mode"] not in ("api", "manual"):
         errs.append(f"mode must be api or manual, got {r['mode']!r}")
     if ch in MANUAL_CHANNELS and r["mode"] == "api":
@@ -160,7 +179,7 @@ def validate_channel(post: dict, ch: str, prefs: dict | None = None) -> dict:
         if not m.startswith("http") and not Path(m).expanduser().exists():
             errs.append(f"media file not found: {m}")
     if ch in ("x", "threads", "instagram"):
-        warns += media_warnings(media, ch)
+        warns += media_warnings(media, ch, prefs)
     if ch == "x":
         texts = x_plan(r)
         limit = x_limit(prefs)
@@ -183,6 +202,24 @@ def validate_channel(post: dict, ch: str, prefs: dict | None = None) -> dict:
                          "(set reply_link_instead to move it to a reply — the reply itself still costs the link rate)")
         est = x_cost(texts, r)
         r["planned_posts"] = texts
+    elif ch == "x_article":
+        from feedhand import article as A
+        conv = A.to_content_state(r["text"])
+        if not (r["title"] or "").strip():
+            errs.append("X Article: title is required")
+        errs += [f"X Article: {e}" for e in conv["errors"]]
+        imgs = [i["path"] for i in conv["images"]] + ([r["cover"]] if r["cover"] else [])
+        errs += [f"X Article: {e}" for e in A.check_images(imgs)]
+        sub = prefs.get("x_subscription_type")
+        if sub != "PremiumPlus":
+            warns.append("X Article: Articles are listed as a Premium+ feature in the X app (help.x.com, not "
+                         "verified for the API); " + (f"this account reports {sub}" if sub else
+                                                       "run `feedhand x-check` to see the account's tier"))
+        if r["mode"] == "api":
+            warns.append("X Article: API cost is unknown (not in the X pricing table); logged as unknown")
+        r["article"] = {"title": r["title"], "cover": r["cover"], "block_count": conv["block_count"],
+                        "image_count": conv["image_count"], "embedded_posts": conv["embedded_posts"],
+                        "links": conv["links"]}
     elif ch == "threads":
         t = r["text"]
         if len(t) > 500:
@@ -218,6 +255,7 @@ def validate_channel(post: dict, ch: str, prefs: dict | None = None) -> dict:
         errs.append(f"unknown channel {ch!r}")
     return {"channel": ch, "mode": r["mode"], "ok": not errs, "errors": errs, "warnings": warns,
             "est_cost_usd": est, **({"planned_posts": r["planned_posts"]} if "planned_posts" in r else {}),
+            **({"article": r["article"], "cost_unknown": r["mode"] == "api"} if "article" in r else {}),
             **({"x_limit": x_limit(prefs)} if ch == "x" else {})}
 
 
@@ -233,5 +271,7 @@ def validate(post: dict, prefs: dict | None = None) -> dict:
         errs.append("requester is required (user or bot name)")
     res = [validate_channel(post, c, prefs) for c in chs]
     ok = not errs and all(r["ok"] for r in res)
+    unknown = [r["channel"] for r in res if r.get("cost_unknown")]
     return {"ok": ok, "errors": errs, "channels": res,
-            "est_cost_usd": round(sum(r["est_cost_usd"] for r in res), 4)}
+            "est_cost_usd": round(sum(r["est_cost_usd"] for r in res), 4),
+            **({"cost_unknown_channels": unknown} if unknown else {})}

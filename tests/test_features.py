@@ -82,7 +82,8 @@ def test_cost_summary(capsys):
     L.add(channel="naver", status="bundle_ready", est_cost_usd=0)
     L.add(ts="2020-01-01T00:00:00+0900", channel="x", status="published", post_id="9", est_cost_usd=1)
     _, d = run(capsys, "cost", "--period", "month")
-    assert d["per_channel"]["x"] == {"est_cost_usd": 0.225, "posts": 2, "deletes": 1, "bundles": 0, "errors": 0}
+    assert d["per_channel"]["x"] == {"est_cost_usd": 0.225, "posts": 2, "deletes": 1, "edits": 0,
+                                       "bundles": 0, "errors": 0, "unknown_cost": 0}
     assert d["posts"] == 2 and d["deletes"] == 1
     _, d = run(capsys, "cost", "--period", "all")
     assert d["total_est_cost_usd"] == 1.225

@@ -7,8 +7,13 @@ import subprocess
 from pathlib import Path
 
 # Approximate per-channel limits (see README). Durations in seconds, sizes in bytes.
+# X Post video (tweet_video), per docs.x.com/x-api/media/introduction (Sep 2026): 20 min / 8 GB for a
+# standard account, 125 min / 16 GB when the posting account has X Premium / verified (pref x_premium).
+# GB taken as 10^9 bytes to stay on the safe side. (140 s / 512 MB is the DM-video limit, not posts.)
+X_VIDEO_STANDARD = {"video_max_bytes": 8 * 1000**3, "video_max_s": 20 * 60}
+X_VIDEO_PREMIUM = {"video_max_bytes": 16 * 1000**3, "video_max_s": 125 * 60}
 LIMITS = {
-    "x": {"video_max_bytes": 512 * 1024**2, "video_max_s": 140, "max_w": 1920, "max_h": 1200, "max_fps": 60,
+    "x": {**X_VIDEO_STANDARD, "max_w": 1920, "max_h": 1200, "max_fps": 60,
           "vcodec": {"h264"}, "acodec": {"aac"}, "containers": {".mp4", ".mov"},
           "gif_max_bytes": 15 * 1024**2, "image_max_bytes": 5 * 1024**2},
     "threads": {"video_max_bytes": 1024**3, "video_max_s": 300, "max_w": 1920, "max_h": 1920, "max_fps": 60,
@@ -42,10 +47,26 @@ def probe(path) -> dict:
             "width": v.get("width") or 0, "height": v.get("height") or 0, "fps": round(fps, 3)}
 
 
-def check(path, channel="x") -> dict:
-    """Return {'kind', 'info', 'issues': [...], 'needs_prep': bool, 'blocking': [...]}."""
+def limits(channel="x", prefs=None) -> dict:
+    """Channel limits; for X the video caps follow prefs x_premium (None = load prefs from disk)."""
+    lim = dict(LIMITS[channel])
+    if channel == "x":
+        if prefs is None:
+            from feedhand import prefs as P
+            prefs = P.load()
+        if prefs.get("x_premium") is True:
+            lim.update(X_VIDEO_PREMIUM)
+    return lim
+
+
+def _mb(n):
+    return f"{n / 1000**3:.0f} GB" if n >= 1000**3 else f"{n / 1024**2:.0f}MB"
+
+
+def check(path, channel="x", prefs=None) -> dict:
+    """Return {'kind', 'info', 'issues': [...], 'needs_prep': bool, 'limits': {...}}."""
     p = Path(path).expanduser()
-    lim = LIMITS[channel]
+    lim = limits(channel, prefs)
     ext = p.suffix.lower()
     size = p.stat().st_size
     if ext == ".gif":
@@ -74,20 +95,24 @@ def check(path, channel="x") -> dict:
     if info["fps"] > lim["max_fps"]:
         issues.append(f"fps {info['fps']} > {lim['max_fps']}")
     if info["size"] > lim["video_max_bytes"]:
-        issues.append(f"size {info['size']/1024**2:.0f}MB > {lim['video_max_bytes']//1024**2}MB")
-    return {"kind": "video", "info": info, "issues": issues, "needs_prep": bool(issues)}
+        issues.append(f"size {_mb(info['size'])} > {_mb(lim['video_max_bytes'])}")
+    return {"kind": "video", "info": info, "issues": issues, "needs_prep": bool(issues),
+            "limits": {"video_max_s": lim["video_max_s"], "video_max_bytes": lim["video_max_bytes"]}}
 
 
 def _even(n):
     return n - n % 2
 
 
-def prep(path, channel, out_dir, thumb=None) -> dict:
+def prep(path, channel, out_dir, thumb=None, prefs=None) -> dict:
     p = Path(path).expanduser()
     out = Path(out_dir).expanduser() / "prepared"
     out.mkdir(parents=True, exist_ok=True)
-    lim = LIMITS[channel]
-    c = check(p, channel)
+    if prefs is None:
+        from feedhand import prefs as P
+        prefs = P.load()
+    lim = limits(channel, prefs)
+    c = check(p, channel, prefs)
     res = {"input": str(p), "channel": channel, "kind": c["kind"], "issues": c["issues"], "output": str(p),
            "prepared": False, "trimmed": False}
     if c["needs_prep"]:
@@ -105,7 +130,7 @@ def prep(path, channel, out_dir, thumb=None) -> dict:
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(dst)]
         subprocess.run(cmd, check=True, capture_output=True)
         res.update(output=str(dst), prepared=True)
-        after = check(dst, channel)
+        after = check(dst, channel, prefs)
         res["remaining_issues"] = after["issues"]
     if thumb is not None:
         tp = out / f"{p.stem}.thumb.jpg"

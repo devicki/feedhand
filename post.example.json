@@ -8,6 +8,7 @@
   "x": {"text": "Short X version", "thread": ["Second post in the thread"], "mode": "api"},
   "threads": {"text": "Threads version (<=500 chars)"},
   "instagram": {"text": "Caption #tag", "media": ["https://cdn.example.com/photo1.jpg", "https://cdn.example.com/clip.mp4"]},
+  "x_article": {"title": "Article title", "text": "# Heading\n\nA paragraph with **bold**, *italic*, ~~strike~~ and a [link](https://example.com).\n\n- list item\n\n![Caption](~/Pictures/figure.png)\n\nhttps://x.com/someone/status/1234567890\n", "cover": "~/Pictures/cover.jpg"},
   "naver": {"title": "Blog title", "text": "Long blog body...", "mode": "manual"},
   "reddit": {"title": "Post title", "subreddit": "example", "mode": "manual"}
  }

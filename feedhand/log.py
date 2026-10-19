@@ -58,19 +58,25 @@ def cost(period="all", now=None):
                     continue
                 if t < start:
                     continue
-            d = per.setdefault(ch, {"est_cost_usd": 0.0, "posts": 0, "deletes": 0, "bundles": 0, "errors": 0})
+            d = per.setdefault(ch, {"est_cost_usd": 0.0, "posts": 0, "deletes": 0, "edits": 0, "bundles": 0,
+                                    "errors": 0, "unknown_cost": 0})
+            if est is None and status in ("published", "article_draft"):
+                d["unknown_cost"] += 1
             d["est_cost_usd"] += est or 0
             total += est or 0
             if status == "published":
                 d["posts"] += len((pid or "").split(",")) if pid else 1
             elif status == "deleted":
                 d["deletes"] += 1
+            elif status == "edited":
+                d["edits"] += 1
             elif status == "bundle_ready":
                 d["bundles"] += 1
-            elif status in ("error", "delete_failed"):
+            elif status in ("error", "delete_failed", "edit_failed"):
                 d["errors"] += 1
     for d in per.values():
         d["est_cost_usd"] = round(d["est_cost_usd"], 4)
     return {"period": period, "since": start.isoformat() if start else None,
             "per_channel": per, "total_est_cost_usd": round(total, 4),
-            "posts": sum(d["posts"] for d in per.values()), "deletes": sum(d["deletes"] for d in per.values())}
+            "posts": sum(d["posts"] for d in per.values()), "deletes": sum(d["deletes"] for d in per.values()),
+            "unknown_cost_items": sum(d["unknown_cost"] for d in per.values())}

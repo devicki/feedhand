@@ -1,8 +1,10 @@
 """X (Twitter) API v2 channel. OAuth 1.0a user context.
 
 Env: X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET.
-Endpoints: POST /2/tweets, DELETE /2/tweets/:id, POST /2/media/upload (simple),
-/2/media/upload/initialize|{id}/append|{id}/finalize + GET status (chunked), /2/media/metadata (alt).
+Endpoints: POST /2/tweets (create; edit via edit_options), GET /2/tweets/:id (edit_controls),
+DELETE /2/tweets/:id, GET /2/users/me, POST /2/media/upload (simple),
+/2/media/upload/initialize|{id}/append|{id}/finalize + GET status (chunked), /2/media/metadata (alt),
+POST /2/articles/draft, POST /2/articles/{id}/publish.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ import hashlib
 import hmac
 import mimetypes
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -22,10 +25,43 @@ API = "https://api.x.com"
 ENV = ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"]
 CHUNK = 4 * 1024 * 1024
 SIMPLE_MAX = 5 * 1024 * 1024
+MAX_SEGMENTS = 10_000  # AppendMediaUploadRequest.segment_index is 0..9999 (OpenAPI)
+VIDEO_TOO_LONG_RE = re.compile(r"not allowed to post a video longer than (\d+) minutes?", re.I)
 
 
 class XError(RuntimeError):
     pass
+
+
+def friendly_error(method, path, code, body: str) -> str:
+    m = VIDEO_TOO_LONG_RE.search(body or "")
+    if code == 403 and m:
+        n = int(m.group(1))
+        return (f"X refused the video: this account may post videos up to {n} minutes "
+                f"(standard 20, X Premium 125). Trim it with `feedhand media prep FILE --channel x`, "
+                f"or if the account has Premium run `feedhand x-check --apply`. [X API {method} {path} -> 403]")
+    return f"X API {method} {path} -> {code}: {(body or '')[:500]}"
+
+
+def processing_budget(size: int, duration: float | None = None) -> float:
+    """Seconds to wait for X media processing: 5 min base + ~1 s per 2 MB + 1 s per second of video, max 4 h."""
+    return min(4 * 3600, 300 + size / (2 * 1024**2) + (duration or 0))
+
+
+def _duration(p) -> float | None:
+    try:
+        from feedhand import media as M
+        return M.probe(p)["duration"] if M.available() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def media_category(path) -> tuple[str, str]:
+    """(mime, media_category) for a Post: tweet_video / tweet_gif / tweet_image."""
+    mime = mimetypes.guess_type(Path(path).name)[0] or "application/octet-stream"
+    if mime.startswith("video/"):
+        return mime, "tweet_video"
+    return mime, "tweet_gif" if mime == "image/gif" else "tweet_image"
 
 
 def missing_env() -> list[str]:
@@ -68,18 +104,15 @@ class XClient:
         h = {"Authorization": oauth_header(method, url, self.creds, params)}
         r = self.s.request(method, url, params=params, json=json, files=files, data=data, headers=h, timeout=120)
         if r.status_code >= 400:
-            raise XError(f"X API {method} {path} -> {r.status_code}: {r.text[:500]}")
+            raise XError(friendly_error(method, path, r.status_code, r.text))
         return r.json() if r.content else {}
 
     # --- media ---
     def upload_media(self, path: str, alt: str | None = None) -> str:
         p = Path(path).expanduser()
-        mime = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        mime, cat = media_category(p)
         size = p.stat().st_size
-        is_video = mime.startswith("video/")
-        is_gif = mime == "image/gif"
-        cat = "tweet_video" if is_video else ("tweet_gif" if is_gif else "tweet_image")
-        if not is_video and not is_gif and size <= SIMPLE_MAX:
+        if cat == "tweet_image" and size <= SIMPLE_MAX:
             with open(p, "rb") as f:
                 d = self._req("POST", "/2/media/upload", files={"media": (p.name, f, mime)},
                               data={"media_category": cat})
@@ -94,24 +127,31 @@ class XClient:
         d = self._req("POST", "/2/media/upload/initialize",
                       json={"media_type": mime, "total_bytes": size, "media_category": cat})
         mid = d["data"]["id"]
+        step = max(CHUNK, -(-size // MAX_SEGMENTS))
         with open(p, "rb") as f:
             i = 0
-            while chunk := f.read(CHUNK):
+            while chunk := f.read(step):
                 self._req("POST", f"/2/media/upload/{mid}/append",
                           files={"media": ("chunk", chunk, "application/octet-stream")},
                           data={"segment_index": str(i)})
                 i += 1
         d = self._req("POST", f"/2/media/upload/{mid}/finalize")
         info = (d.get("data") or {}).get("processing_info")
-        for _ in range(60):
+        budget = processing_budget(size, _duration(p) if cat == "tweet_video" else None)
+        waited = 0.0
+        while True:
             if not info or info.get("state") == "succeeded":
                 return mid
             if info.get("state") == "failed":
                 raise XError(f"media processing failed: {info}")
-            self.sleep(int(info.get("check_after_secs", 2)))
+            if waited >= budget:
+                raise XError(f"media processing timed out after {int(waited)} s (media_id {mid}, "
+                             f"last state {info.get('state')}, {info.get('progress_percent', '?')}%)")
+            wait = min(60, max(1, int(info.get("check_after_secs", 2))))
+            self.sleep(wait)
+            waited += wait
             d = self._req("GET", "/2/media/upload", params={"command": "STATUS", "media_id": mid})
             info = (d.get("data") or {}).get("processing_info")
-        raise XError("media processing timed out")
 
     # --- posts ---
     def create(self, text, media_ids=None, reply_to=None) -> dict:
@@ -125,8 +165,26 @@ class XClient:
     def delete(self, tweet_id) -> bool:
         return bool(self._req("DELETE", f"/2/tweets/{tweet_id}").get("data", {}).get("deleted"))
 
-    def me(self) -> dict:
-        return self._req("GET", "/2/users/me")["data"]
+    def edit(self, tweet_id, text) -> dict:
+        """Edit own recent post (X Premium). Returns the new version's data (new id)."""
+        return self._req("POST", "/2/tweets",
+                         json={"text": text, "edit_options": {"previous_post_id": str(tweet_id)}})["data"]
+
+    def get_post(self, tweet_id, fields="edit_controls,attachments,created_at") -> dict:
+        return self._req("GET", f"/2/tweets/{tweet_id}", params={"tweet.fields": fields})["data"]
+
+    def me(self, fields=None) -> dict:
+        return self._req("GET", "/2/users/me", params={"user.fields": fields} if fields else None)["data"]
+
+    # --- articles ---
+    def article_draft(self, title, content_state, cover_media=None) -> dict:
+        body = {"title": title, "content_state": content_state}
+        if cover_media:
+            body["cover_media"] = cover_media
+        return self._req("POST", "/2/articles/draft", json=body)["data"]
+
+    def article_publish(self, article_id) -> dict:
+        return self._req("POST", f"/2/articles/{article_id}/publish")["data"]
 
     def publish_thread(self, texts, media=None, alt=None) -> list[dict]:
         alt = alt or {}
