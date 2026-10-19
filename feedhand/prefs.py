@@ -12,6 +12,7 @@ DEFAULTS = {
     "default_mode_instagram": "api",
     "out_dir": "~/feedhand-out",
     "x_link_cost_warning": True,
+    "x_premium": False,           # X Premium author: long posts up to 25,000 weighted chars
     "language": "en",
 }
 
@@ -39,13 +40,28 @@ def _coerce(v: str):
         return v
 
 
+BOOL_KEYS = {"x_premium", "x_link_cost_warning"}
+
+
+def _bool(k: str, v):
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("true", "1", "yes", "on"):
+        return True
+    if s in ("false", "0", "no", "off"):
+        return False
+    raise ValueError(f"{k} must be true or false, got {v!r}")
+
+
 def set_many(pairs: list[str]) -> dict:
     d = load()
     for kv in pairs:
         if "=" not in kv:
             raise ValueError(f"expected k=v, got {kv!r}")
         k, v = kv.split("=", 1)
-        d[k.strip()] = _coerce(v.strip())
+        k, v = k.strip(), _coerce(v.strip())
+        d[k] = _bool(k, v) if k in BOOL_KEYS else v
     save(d)
     return d
 

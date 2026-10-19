@@ -106,6 +106,20 @@ def test_prefs_mode(capsys):
     assert run(capsys, "prefs", "--set", "bad")[0] == 2
 
 
+def test_prefs_x_premium(capsys, tmp_path):
+    code, d = run(capsys, "prefs")
+    assert d["prefs"]["x_premium"] is False
+    p = write(tmp_path, {"requester": "user", "channels": ["x"], "text": "a" * 300})
+    assert run(capsys, "draft", "validate", p)[0] == 2
+    code, d = run(capsys, "prefs", "--set", "x_premium=true")
+    assert code == 0 and d["prefs"]["x_premium"] is True
+    code, d = run(capsys, "draft", "validate", p)
+    assert code == 0 and d["channels"][0]["x_limit"] == 25000
+    assert run(capsys, "prefs", "--set", "x_premium=maybe")[0] == 2
+    code, d = run(capsys, "prefs", "--set", "x_premium=False")
+    assert d["prefs"]["x_premium"] is False
+
+
 def test_delete_cost_logged(capsys, monkeypatch):
     class Fake:
         def delete(self, tid):

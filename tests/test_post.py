@@ -97,3 +97,38 @@ def test_validate_top():
     r = PO.validate({"requester": "user", "channels": ["x", "naver"], "text": "hi"})
     assert r["ok"] and r["est_cost_usd"] == 0.015
     assert not PO.validate({"requester": "u", "channels": ["myspace"], "text": "a"})["ok"]
+
+
+def test_x_limit_standard_default():
+    r = v({"text": "a" * 281}, "x")
+    assert r["x_limit"] == 280 and not r["ok"] and "> 280" in r["errors"][0]
+    assert PO.x_limit({"x_premium": False}) == 280 and PO.x_limit({"x_premium": "true"}) == 280
+
+
+def test_x_limit_premium():
+    prem = {"x_premium": True}
+    r = PO.validate_channel({"text": "a" * 25_000}, "x", prem)
+    assert r["ok"] and r["x_limit"] == 25_000
+    assert r["planned_posts"] == ["a" * 25_000]  # one post, not split into a thread
+    assert any("long post" in w for w in r["warnings"])
+    r = PO.validate_channel({"text": "a" * 25_001}, "x", prem)
+    assert not r["ok"] and "25001 weighted chars > 25000" in r["errors"][0]
+    assert PO.validate_channel({"text": "가" * 12_500}, "x", prem)["ok"]
+    assert not PO.validate_channel({"text": "가" * 12_501}, "x", prem)["ok"]
+    assert not any("long post" in w for w in PO.validate_channel({"text": "short"}, "x", prem)["warnings"])
+
+
+def test_x_premium_cost_and_thread_unchanged():
+    prem = {"x_premium": True}
+    assert PO.validate_channel({"text": "a" * 5000}, "x", prem)["est_cost_usd"] == 0.015
+    assert PO.validate_channel({"text": "a" * 5000 + " https://example.com"}, "x", prem)["est_cost_usd"] == 0.2
+    r = PO.validate_channel({"per_channel": {"x": {"text": "a" * 1000, "thread": ["b" * 1000]}}}, "x", prem)
+    assert r["ok"] and len(r["planned_posts"]) == 2 and r["est_cost_usd"] == 0.03
+
+
+def test_validate_reads_prefs_file():
+    from feedhand import prefs as P
+    post = {"requester": "user", "channels": ["x"], "text": "a" * 300}
+    assert not PO.validate(post)["ok"]
+    P.set_many(["x_premium=true"])
+    assert PO.validate(post)["ok"]

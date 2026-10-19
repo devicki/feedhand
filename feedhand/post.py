@@ -35,6 +35,14 @@ X_COST_POST_LINK = 0.20
 X_COST_MEDIA_ALT = 0.005
 X_COST_DELETE = 0.01  # confirmed in the X console usage view
 
+# X weighted-length limits. Standard accounts: 280 (docs.x.com "Counting characters").
+# X Premium (any tier) "longer posts": 25,000 per X's Premium help page. X documents the
+# weighting (URL = 23, CJK/emoji = 2) only for the 280 case; we apply the same weighting to
+# long posts. The X API pricing table bills Post: Create per request, with no separate
+# line for long posts, so cost estimates do not change with length.
+X_LIMIT_STANDARD = 280
+X_LIMIT_PREMIUM = 25_000
+
 
 def load(path) -> dict:
     return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -91,6 +99,10 @@ def strip_links(text: str) -> tuple[str, list[str]]:
     return re.sub(r"[ \t]{2,}", " ", t).strip(), ls
 
 
+def x_limit(prefs: dict | None = None) -> int:
+    return X_LIMIT_PREMIUM if (prefs or {}).get("x_premium") is True else X_LIMIT_STANDARD
+
+
 def x_plan(r: dict) -> list[str]:
     """Return the list of tweet texts (main + replies)."""
     texts = [r["text"]] + r["thread"]
@@ -128,7 +140,11 @@ def media_warnings(media, ch) -> list[str]:
     return out
 
 
-def validate_channel(post: dict, ch: str) -> dict:
+def validate_channel(post: dict, ch: str, prefs: dict | None = None) -> dict:
+    """prefs: user prefs (only x_premium is read here); None = load from disk."""
+    if prefs is None:
+        from feedhand import prefs as P
+        prefs = P.load()
     errs, warns = [], []
     r = resolve(post, ch)
     media = r["media"]
@@ -147,10 +163,15 @@ def validate_channel(post: dict, ch: str) -> dict:
         warns += media_warnings(media, ch)
     if ch == "x":
         texts = x_plan(r)
+        limit = x_limit(prefs)
         for i, t in enumerate(texts):
             n = x_weighted_len(t)
-            if n > 280:
-                errs.append(f"post {i+1}: {n} weighted chars > 280")
+            if n > limit:
+                errs.append(f"post {i+1}: {n} weighted chars > {limit}")
+            elif n > X_LIMIT_STANDARD:
+                warns.append(f"X: post {i+1} is a long post ({n} weighted chars, x_premium); timelines show "
+                             f"about the first {X_LIMIT_STANDARD} before 'Show more', and @mentions after that "
+                             "point do not notify")
             if not t.strip() and not (i == 0 and media):
                 errs.append(f"post {i+1}: empty text")
         if kinds.count("video") > 1 or ("video" in kinds and len(media) > 1):
@@ -196,17 +217,21 @@ def validate_channel(post: dict, ch: str) -> dict:
     else:
         errs.append(f"unknown channel {ch!r}")
     return {"channel": ch, "mode": r["mode"], "ok": not errs, "errors": errs, "warnings": warns,
-            "est_cost_usd": est, **({"planned_posts": r["planned_posts"]} if "planned_posts" in r else {})}
+            "est_cost_usd": est, **({"planned_posts": r["planned_posts"]} if "planned_posts" in r else {}),
+            **({"x_limit": x_limit(prefs)} if ch == "x" else {})}
 
 
-def validate(post: dict) -> dict:
+def validate(post: dict, prefs: dict | None = None) -> dict:
+    if prefs is None:
+        from feedhand import prefs as P
+        prefs = P.load()
     chs = post.get("channels") or []
     errs = []
     if not chs:
         errs.append("channels list is empty")
     if not post.get("requester"):
         errs.append("requester is required (user or bot name)")
-    res = [validate_channel(post, c) for c in chs]
+    res = [validate_channel(post, c, prefs) for c in chs]
     ok = not errs and all(r["ok"] for r in res)
     return {"ok": ok, "errors": errs, "channels": res,
             "est_cost_usd": round(sum(r["est_cost_usd"] for r in res), 4)}
