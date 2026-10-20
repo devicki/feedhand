@@ -9,8 +9,9 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
-from feedhand import __version__, article as A, log as L, media as M, post as PO, prefs as P, schedule as S
+from feedhand import __version__, article as A, fetch as F, log as L, media as M, post as PO, prefs as P, schedule as S
 from feedhand.channels import manual, meta, x as X
 
 X_COST_USER_READ = 0.01   # User: Read (pricing table)
@@ -247,6 +248,23 @@ def cmd_media_prep(a):
 
 def cmd_media_check(a):
     out({"ok": True, **M.check(a.file, a.channel)})  # X limits follow prefs x_premium
+
+
+def cmd_media_fetch(a):
+    try:
+        if a.request:
+            post = json.loads(Path(a.request).read_text())
+            new, res = F.localize(post, a.channel, a.id)
+            outp = a.out or str(Path(a.request).with_suffix(".local.json"))
+            Path(outp).write_text(json.dumps(new, ensure_ascii=False, indent=1))
+            out({"ok": True, "fetched": res, "request": outp})
+        if not a.specs:
+            out({"ok": False, "error": "give HOST:/abs/path ... or --request FILE"}, 2)
+        out({"ok": True, "fetched": F.fetch(a.specs, a.channel, a.id)})
+    except SystemExit:
+        raise
+    except Exception as e:  # noqa: BLE001
+        out({"ok": False, "error": str(e)}, 2)
 
 
 def cmd_cost(a):
@@ -503,6 +521,13 @@ def build():
         if name == "prep":
             m.add_argument("--thumb", type=float, metavar="SECONDS")
         m.set_defaults(f=fn)
+    mf = msp.add_parser("fetch", help="copy server media (HOST:/abs/path) over SSH into ~/.feedhand/media/<id>/")
+    mf.add_argument("specs", nargs="*", metavar="HOST:/abs/path")
+    mf.add_argument("--request", help="post JSON; fetch its {host,path} media and write FILE.local.json")
+    mf.add_argument("--out", help="output path for the rewritten request")
+    mf.add_argument("--id", help="per-request folder name (default: timestamp)")
+    mf.add_argument("--channel", choices=["x", "threads", "instagram"], default="x")
+    mf.set_defaults(f=cmd_media_fetch)
     co = sp.add_parser("cost")
     co.add_argument("--period", choices=["week", "month", "all"], default="month")
     co.set_defaults(f=cmd_cost)

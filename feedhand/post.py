@@ -165,7 +165,7 @@ def validate_channel(post: dict, ch: str, prefs: dict | None = None) -> dict:
     errs, warns = [], []
     r = resolve(post, ch, prefs)
     media = r["media"]
-    kinds = [kind(m) for m in media]
+    kinds = [kind(m) if isinstance(m, str) else "server" for m in media]
     est = 0.0
     if ch == "x_article" and r["media"] == [] and (post.get("per_channel") or {}).get(ch, {}).get("media"):
         warns.append("X Article: per_channel.x_article.media is ignored; put images in the Markdown body")
@@ -173,6 +173,12 @@ def validate_channel(post: dict, ch: str, prefs: dict | None = None) -> dict:
         errs.append(f"mode must be api or manual, got {r['mode']!r}")
     if ch in MANUAL_CHANNELS and r["mode"] == "api":
         errs.append(f"{ch} has no posting API; use mode manual")
+    server = [m for m in media if isinstance(m, dict)]
+    if server:
+        errs.append(f"{ch}: {len(server)} server media entr(y/ies) not fetched yet; run "
+                    "`feedhand media fetch --request FILE` first")
+        media = [m for m in media if not isinstance(m, dict)]
+        kinds = [kind(m) for m in media]
     for m, k in zip(media, kinds):
         if k == "unknown":
             errs.append(f"unsupported media type: {m}")

@@ -14,6 +14,7 @@ DEFAULTS = {
     "x_link_cost_warning": True,
     "x_premium": False,           # X Premium author: long posts up to 25,000 weighted chars
     "language": "en",
+    "media_hosts": ["srv-dev", "srv-bot"],  # SSH aliases `media fetch` may copy from
 }
 
 

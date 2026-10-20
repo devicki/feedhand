@@ -38,13 +38,14 @@ Every command prints one JSON object. Exit codes: `0` ok, `2` error, `3` needs c
 | `feedhand schedule run-due` | publish due items once each (pending → publishing → done/failed), logged with `schedule#ID`; prints `pending` and `stop_routine` |
 | `feedhand media check FILE [--channel x\|threads\|instagram]` | probe a video/GIF/image against channel limits |
 | `feedhand media prep FILE [--channel x] [--thumb SECONDS]` | transcode/trim/downscale only when needed → `~/feedhand-out/prepared/`; optional thumbnail JPEG |
+| `feedhand media fetch HOST:/abs/path [...] [--id ID] [--channel x]` / `feedhand media fetch --request post.json [--id ID]` | copy server media over a saved SSH alias (`scp`) into `~/.feedhand/media/<id>/`; only aliases in prefs `media_hosts` (default `["srv-dev","srv-bot"]`), absolute paths, no `..`; remote size checked against channel limits before copying, local size verified; `--request` rewrites `{host,path}` media to local paths in `post.local.json` |
 | `feedhand cost [--period week\|month\|all]` | estimated X API spend per channel from the log + post/delete counts (week = since Monday, month = since the 1st; default month) |
 | `feedhand log [--channel x] [--limit N]` | posting history (SQLite, `~/.feedhand/history.db`) |
 | `feedhand prefs [--set k=v ...]` | `~/.feedhand/prefs.json`, mode 600 (e.g. `--set x_premium=true`) |
 
 ## post.json
 
-See [`post.example.json`](post.example.json). Top-level `text`/`media` are defaults; `per_channel.<ch>` overrides `text`, `media`, `mode` (`api`/`manual`), `thread` (X replies), `alt` (X alt text by media path), `title`/`subreddit` (manual). `requester` is `user` or a bot name. `reply_link_instead: true` moves links on X out of the main post into a self-reply.
+See [`post.example.json`](post.example.json). Top-level `text`/`media` are defaults; `per_channel.<ch>` overrides `text`, `media`, `mode` (`api`/`manual`), `thread` (X replies), `alt` (X alt text by media path), `title`/`subreddit` (manual). `requester` is `user` or a bot name. A `media` entry may also be a server file `{"host": "<ssh-alias>", "path": "/abs/path", "note": "..."}`; `draft validate` refuses those until `feedhand media fetch --request` has replaced them with local paths. `reply_link_instead: true` moves links on X out of the main post into a self-reply.
 
 Channel `x_article` (an X Article) uses `per_channel.x_article.title`, `.text` (Markdown body) and `.cover` (optional local image); `media` is ignored there, so put images in the body as `![caption](local/path.png)`. Add `"x_article"` to `channels` to use it.
 
